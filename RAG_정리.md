@@ -229,3 +229,114 @@ LangChain/LlamaIndex · markitdown/docling/Upstage · BGE-M3/e5/OpenAI · Chroma
 2. Chroma + PDF 한 개 Q&A
 3. 하이브리드 + 리랭커 → RAGAS로 개선 전후 비교
 4. Agentic RAG
+
+
+---
+
+## 11. 하이브리드 검색 + 리랭커 → RAGAS로 개선 전후 비교
+
+"검색을 개선하고, 정말 좋아졌는지 숫자로 확인하는 실습".
+
+### ① 하이브리드 검색 = 벡터 + BM25
+| | 벡터 검색 | BM25 (키워드) |
+|---|---|---|
+| 강점 | 의미가 비슷한 표현 ("재택" ↔ "원격근무") | 정확한 단어 (제품코드, 고유명사, 조항 번호) |
+| 약점 | 고유명사, 숫자, 코드 | 동의어, 다른 표현 |
+
+결과 합치기: **RRF (Reciprocal Rank Fusion)** — 점수가 아니라 **순위**로 합친다. 단위가 다른 점수를 맞출 필요가 없다.
+```python
+def rrf(rank_lists, k=60):
+    scores = {}
+    for ranks in rank_lists:                 # [벡터 결과 id 목록, BM25 결과 id 목록]
+        for r, doc_id in enumerate(ranks):
+            scores[doc_id] = scores.get(doc_id, 0) + 1 / (k + r + 1)
+    return sorted(scores, key=scores.get, reverse=True)
+```
+
+### ② 리랭커
+1차 후보 20~50개를 정밀한 모델로 다시 채점 → Top 3~5개.
+- **bi-encoder (임베딩):** 질문과 문서를 따로 벡터화한 뒤 비교 → 빠르지만 대략적
+- **cross-encoder (리랭커):** 질문과 문서를 함께 입력해서 관련도 판단 → 느리지만 정확
+- 1차는 빠르게 넓게, 2차는 정확하게.
+```python
+from sentence_transformers import CrossEncoder
+reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
+scores = reranker.predict([(query, c) for c in candidates])
+top5 = [c for _, c in sorted(zip(scores, candidates), reverse=True)[:5]]
+```
+
+### ③ RAGAS 지표
+| 지표 | 의미 | 대상 |
+|---|---|---|
+| Context Recall | 정답에 필요한 정보가 검색 결과에 있나 | 검색 |
+| Context Precision | 상위권에 관련 문서가 있나 | 검색 |
+| Faithfulness | 답변이 문서에 근거하나 (환각 여부) | 생성 |
+| Answer Relevancy | 답변이 질문에 맞나 | 생성 |
+
+### 실험 설계
+```
+평가셋 (질문 + 정답) 50~100개
+ → A: 벡터만  /  B: 하이브리드  /  C: 하이브리드 + 리랭커
+ → 같은 평가셋으로 점수 비교
+```
+| 구성 (가상의 숫자) | Context Recall | Faithfulness |
+|---|---|---|
+| A. 벡터만 | 0.68 | 0.81 |
+| B. 하이브리드 | 0.77 | 0.84 |
+| C. + 리랭커 | 0.85 | 0.90 |
+
+→ "지연 시간 +300ms 대비 Recall +8%p"처럼 **근거 있는 결정**을 내릴 수 있다.
+
+---
+
+## 12. Agentic RAG
+
+LLM이 **에이전트**로서 검색을 **도구**처럼 스스로 판단해서 사용하는 방식.
+
+| | 기본 RAG | Agentic RAG |
+|---|---|---|
+| 검색 여부 | 항상 | 필요할 때만 |
+| 검색 횟수 | 1번 | 여러 번 (부족하면 재검색) |
+| 검색어 | 질문 그대로 | LLM이 만들고 수정 |
+| 검색 대상 | 벡터DB 1개 | 여러 도구 중 선택 (문서, SQL, 웹, API) |
+| 검증 | 없음 | 결과가 충분한지 스스로 확인 |
+
+### 예시
+"작년 대비 올해 연차 규정 변화 + 우리 팀 평균 사용률?"
+```
+ → search_docs("2026 연차 규정")
+ → search_docs("2025 연차 규정")
+ → run_sql("SELECT AVG(...) FROM leave WHERE team='영업1팀'")
+ → 정보가 충분한지 확인 → 비교해서 답변
+```
+기본 RAG는 한 번만 검색해서 정보를 놓치고, 집계는 아예 못 한다. (→ 8장의 엑셀 집계형 질문 해결)
+
+### 구현 뼈대 (도구 호출 반복)
+```python
+tools = [
+    {"name": "search_docs", "description": "사내 문서를 검색한다",
+     "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"name": "run_sql", "description": "인사 DB에 SQL을 실행한다",
+     "input_schema": {"type": "object", "properties": {"sql": {"type": "string"}}, "required": ["sql"]}},
+]
+messages = [{"role": "user", "content": question}]
+while True:
+    res = client.messages.create(model="claude-sonnet-5-5", max_tokens=1024,
+                                 tools=tools, messages=messages)
+    if res.stop_reason != "tool_use":
+        break
+    messages.append({"role": "assistant", "content": res.content})
+    results = [{"type": "tool_result", "tool_use_id": b.id, "content": run_tool(b.name, b.input)}
+               for b in res.content if b.type == "tool_use"]
+    messages.append({"role": "user", "content": results})
+print(res.content[0].text)
+```
+프레임워크: LangGraph, LlamaIndex Agents.
+
+### 장단점과 실무 팁
+- 장점: 비교, 여러 단계, 여러 출처가 필요한 복잡한 질문에 강하다.
+- 단점: LLM을 여러 번 호출하므로 **느리고 비싸며**, 동작 예측과 디버깅이 어렵다.
+- **기본 RAG를 먼저 잘 만들고**, 그것으로 해결되지 않는 질문 유형이 확인되면 도입한다. 검색 품질이 나쁘면 에이전트도 나쁘다.
+
+**한 줄 요약:** 11장 = 검색을 더 정확하게 + 효과 측정 / 12장 = 검색을 언제, 어떻게, 몇 번 할지 LLM이 결정.
+

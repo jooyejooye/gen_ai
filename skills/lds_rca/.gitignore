@@ -1,0 +1,9 @@
+# 사내 설정/비밀 정보
+config.json
+
+# 실행 결과물 (리포트, history DB, eml)
+out/*
+!out/.gitkeep
+
+__pycache__/
+*.pyc

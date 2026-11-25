@@ -1,0 +1,44 @@
+{
+  "_comment": "복사해서 config.json 으로 만들어 사용. 비밀번호는 환경변수로 (예: LDS_ORACLE_PW).",
+  "mode": "mock",
+
+  "db": {
+    "order": ["appdb", "oracle"],
+    "oracle": {
+      "dsn": "host:1521/service",
+      "user": "USER",
+      "password_env": "LDS_ORACLE_PW",
+      "sql": "SELECT STARTTIME, ENDTIME, EQPID FROM ROOT_HIST WHERE PRODUCT = :product AND ROOTID = :rootid AND STEP = :step"
+    },
+    "appdb": {
+      "_comment": "appdb 접속 방식 확인 필요 (ODBC DSN 가정). 드라이버에 맞게 query_root.py 의 _query_appdb 수정",
+      "odbc_dsn": "APPDB",
+      "user": "USER",
+      "password_env": "LDS_APPDB_PW",
+      "sql": "SELECT STARTTIME, ENDTIME, EQPID FROM ROOT_HIST WHERE PRODUCT = ? AND ROOTID = ? AND STEP = ?"
+    }
+  },
+
+  "equipment": {
+    "transport": "mock",
+    "_transport_options": "mock | etelnet",
+    "etelnet_cmd": ["etelnet", "{eqpid}"],
+    "log_dir": "/log",
+    "mock_log_dir": "sample/logs",
+    "prompt_regex": "[$#>]\\s*$"
+  },
+
+  "errorcode_header": "sample/errorcode.h",
+  "scrape": { "window_lines": 20, "max_block_lines": 400 },
+
+  "mail": {
+    "smtp_host": "smtp.company.local",
+    "smtp_port": 25,
+    "from": "lds-rca@company.local",
+    "to": ["me@company.local"],
+    "user": "",
+    "password_env": "LDS_SMTP_PW"
+  },
+
+  "history_db": "out/history.sqlite"
+}
